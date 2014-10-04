@@ -1,7 +1,5 @@
 cd %~dp0
 cd ..
-mkdir log
-mkdir service
 set BASE=%CD%
 set CLASSPATH="%BASE%/lib/*;%BASE%/export/jars/las2peer.jar;%BASE%/service/*"
 

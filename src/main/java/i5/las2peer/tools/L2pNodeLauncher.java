@@ -780,10 +780,11 @@ public class L2pNodeLauncher {
 				launcher.commandPrompt.handleLine(args[i]);
 			}
 
-			if (launcher.isFinished())
+			if (launcher.isFinished()) {
 				launcher.printMessage("All commands have been handled and shutdown has been called -> end!");
-			else
+			} else {
 				launcher.printMessage("All commands have been handled -- keeping node open!");
+			}
 		} catch (NodeException e) {
 			launcher.bFinished = true;
 			e.printStackTrace();
