@@ -6,6 +6,8 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
+import java.util.Collection;
 import java.util.Hashtable;
 import java.util.Properties;
 import java.util.Set;
@@ -79,26 +81,132 @@ public abstract class Configurable {
 	 * @param value
 	 * 
 	 * @throws IllegalAccessException
+	 * @throws InstantiationException
 	 */
-	private void setField ( Field f, String value ) throws IllegalAccessException {
+	@SuppressWarnings("unchecked")
+	public void setField ( Field f, String value ) throws IllegalAccessException, InstantiationException{
 		Class<?> fieldType = f.getType();
-		
+
 		if ( fieldType.equals( String.class ) ) {
-			f.set( this, value);
-		} else if ( fieldType.equals( long.class ) ) {
-			f.setLong (this, Long.parseLong( value ));
-		} else if ( fieldType.equals ( int.class )) {
-			f.setInt( this, Integer.parseInt( value ) );
-		} else if ( fieldType.equals ( short.class )) {
-			f.setShort(this, Short.parseShort(value));
-		} else if ( fieldType.equals( boolean.class) ) {
-			f.setBoolean(this, Boolean.parseBoolean(value));
-		} else if ( fieldType.equals (float.class)) {
-			f.setFloat(this, Float.parseFloat(value));
-		} else if ( fieldType.equals( double.class)) {
-			f.setDouble(this, Double.parseDouble( value) );
+			f.set(this, value);
+		} else if ( fieldType.equals( long.class ) || fieldType.equals ( Long.class )){
+			f.set(this, Long.parseLong(value));
+		} else if ( fieldType.equals ( int.class )|| fieldType.equals ( Integer.class )) {
+			f.set(this, Integer.parseInt(value));
+		} else if ( fieldType.equals ( short.class )|| fieldType.equals ( Short.class )) {
+			f.set(this, Short.parseShort(value));
+		} else if ( fieldType.equals( boolean.class) || fieldType.equals ( Boolean.class )) {
+			f.set(this, Boolean.parseBoolean(value));
+		} else if ( fieldType.equals (float.class) || fieldType.equals ( Float.class )) {
+			f.set(this, Float.parseFloat(value));
+		} else if ( fieldType.equals( double.class)|| fieldType.equals ( Double.class )) {
+			f.set(this, Double.parseDouble(value));
 		} else {
-			System.err.println( "Unknown class of field: " + f.getName() + ": " + f.getType() );
+			String[] values=value.split("\\s*,\\s*");//how to split the value string!
+			if(fieldType.isArray())
+			{
+				fieldType=fieldType.getComponentType();
+
+
+
+				if ( fieldType.equals( String.class ) ) {
+					f.set(this,values);
+				} else if ( fieldType.equals( long.class )  || fieldType.equals ( Long.class )){
+					Long[] vl=new Long[values.length];
+					for (int i = 0; i < values.length; i++)
+						vl[i] = Long.parseLong(values[i]);
+					f.set(this, vl);
+				} else if ( fieldType.equals ( int.class ) || fieldType.equals ( Integer.class )) {
+					Integer[] vl=new Integer[values.length];
+					for (int i = 0; i < values.length; i++)
+						vl[i] = Integer.parseInt(values[i]);
+					f.set(this, vl);
+				} else if ( fieldType.equals ( short.class ) || fieldType.equals ( Short.class )) {
+					Short[] vl=new Short[values.length];
+					for (int i = 0; i < values.length; i++)
+						vl[i] = Short.parseShort(values[i]);
+					f.set(this, vl);
+				} else if ( fieldType.equals( boolean.class)  || fieldType.equals ( Boolean.class )) {
+					Boolean[] vl=new Boolean[values.length];
+					for (int i = 0; i < values.length; i++)
+						vl[i] = Boolean.parseBoolean(values[i]);
+					f.set(this, vl);
+				} else if ( fieldType.equals (float.class) || fieldType.equals ( Float.class )) {
+					Float[] vl=new Float[values.length];
+					for (int i = 0; i < values.length; i++)
+						vl[i] = Float.parseFloat(values[i]);
+					f.set(this, vl);
+
+				} else if ( fieldType.equals( double.class) || fieldType.equals ( Double.class )) {
+					Double[] vl=new Double[values.length];
+					for (int i = 0; i < values.length; i++)
+						vl[i] = Double.parseDouble(values[i]);
+					f.set(this, vl);
+				}
+				else
+				{
+					System.err.println("Unknown class of field: " + f.getName() + ": " + f.getType());
+				}
+			}
+			else
+			{
+				if(Collection.class.isAssignableFrom(fieldType))
+				{
+					ParameterizedType fcoltype = (ParameterizedType) f.getGenericType();
+					Class<?> genericType = (Class<?>) fcoltype.getActualTypeArguments()[0];
+					if ( genericType.equals( String.class ) ) {
+						Collection<String> col = (Collection<String>) fieldType.newInstance();
+						for (int i = 0; i < values.length; i++)
+							col.add(values[i]);
+						f.set(this, col);
+					} else if ( genericType.equals ( Long.class )){ //primitive generics not possible anyway
+
+						Collection<Long> col = (Collection<Long>) fieldType.newInstance();
+						for (int i = 0; i < values.length; i++)
+							col.add(Long.parseLong(values[i]));
+						f.set(this, col);
+					} else if ( genericType.equals ( Integer.class )) {
+						Collection<Integer> col = (Collection<Integer>) fieldType.newInstance();
+						for (int i = 0; i < values.length; i++)
+							col.add(Integer.parseInt(values[i]));
+						f.set(this, col);
+					} else if ( genericType.equals ( Short.class )) {
+						Collection<Short> col = (Collection<Short>) fieldType.newInstance();
+						for (int i = 0; i < values.length; i++)
+							col.add(Short.parseShort(values[i]));
+						f.set(this, col);
+					} else if ( genericType.equals ( Boolean.class )) {
+						Collection<Boolean> col = (Collection<Boolean>) fieldType.newInstance();
+						for (int i = 0; i < values.length; i++)
+							col.add(Boolean.parseBoolean(values[i]));
+						f.set(this, col);
+					} else if ( genericType.equals ( Float.class )) {
+						Collection<Float> col = (Collection<Float>) fieldType.newInstance();
+						for (int i = 0; i < values.length; i++)
+							col.add(Float.parseFloat(values[i]));
+						f.set(this, col);
+					} else if ( genericType.equals ( Double.class )) {
+						Collection<Double> col = (Collection<Double>) fieldType.newInstance();
+						for (int i = 0; i < values.length; i++)
+							col.add(Double.parseDouble(values[i]));
+						f.set(this, col);
+					}
+					else
+					{
+						System.err.println("Unknown class of field: " + f.getName() + ": " + f.getType());
+					}
+
+
+				}
+				else
+				{
+					System.err.println("Unknown class of field: " + f.getName() + ": " + f.getType());
+				}
+
+
+
+			}
+
 		}
 	}
 	
