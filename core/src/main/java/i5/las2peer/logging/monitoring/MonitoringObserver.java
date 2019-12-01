@@ -1,5 +1,13 @@
 package i5.las2peer.logging.monitoring;
 
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
 import i5.las2peer.api.execution.ServiceInvocationException;
 import i5.las2peer.api.logging.MonitoringEvent;
 import i5.las2peer.api.security.AgentException;
@@ -25,9 +33,9 @@ import i5.las2peer.tools.CryptoException;
  */
 public class MonitoringObserver implements NodeObserver {
 
-	public static final String DATA_PROCESSING_SERVICE = "i5.las2peer.services.mobsos.dataProcessing.MonitoringDataProcessingService";
-
-	private boolean readyForInitializing = false; // Is set to false as long as the node is not ready to initialize the
+	public static final String DATA_PROCESSING_SERVICE = "i5.las2peer.services.mobsos.dataProcessing.MobSOSDataProcessingService";
+	private static final int RMI_TIMEOUT = 5;
+	private boolean readyForInitializing = true; // Is set to false as long as the node is not ready to initialize the
 													// monitoring agents.
 	private boolean initializedDone = false; // Used to determine, if the initialization process has finished.
 	private MonitoringMessage[] monitoringMessages; // The size is determined by the constructor. Will be send at once.
@@ -54,11 +62,13 @@ public class MonitoringObserver implements NodeObserver {
 		this.registeredAt = registeredAt;
 		waitUntilSend = 1000 * 10; // 10 s
 		Thread sendingThread = new Thread() {
+			@Override
 			public void run() {
 				try {
 					while (true) {
 						Thread.sleep(waitUntilSend);
 						if (messagesCount > 0) {
+							checkInit();
 							// Send messages after waitUntilSend ms
 							if (initializedDone) {
 								// Do not send old messages...
@@ -91,10 +101,18 @@ public class MonitoringObserver implements NodeObserver {
 		this.messagesCount = 0;
 		try {
 			sendingAgent = MonitoringAgent.createMonitoringAgent("sendingAgentPass");
-		} catch (CryptoException e) {
+		} catch (CryptoException | AgentOperationFailedException e) {
 			e.printStackTrace();
-		} catch (AgentOperationFailedException e) {
-			e.printStackTrace();
+		}
+	}
+
+	private void checkInit() {
+		if (readyForInitializing) {
+			readyForInitializing = false; // "Nearly" atomic, enough in this case;-)
+			initializedDone = initializeAgents();
+			if (!initializedDone) {
+				readyForInitializing = true;
+			}
 		}
 	}
 
@@ -108,21 +126,19 @@ public class MonitoringObserver implements NodeObserver {
 	 */
 	private boolean initializeAgents() {
 		try {
-			sendingAgent.unlock("sendingAgentPass");
-			registeredAt.storeAgent(sendingAgent);
-			registeredAt.registerReceiver(sendingAgent);
-			System.out.println("Monitoring: Registered MonitoringAgent: " + sendingAgent.getIdentifier());
-
+			if (!registeredAt.hasAgent(sendingAgent.getIdentifier())) {
+				sendingAgent.unlock("sendingAgentPass");
+				registeredAt.storeAgent(sendingAgent);
+				registeredAt.registerReceiver(sendingAgent);
+				System.out.println("Monitoring: Registered MonitoringAgent: " + sendingAgent.getIdentifier());
+			}
 		} catch (AgentException e) {
 			System.out.println("Monitoring: Problems registering MonitoringAgent!" + e);
-			e.printStackTrace();
 		}
 
 		try {
 			System.out.println("Monitoring: Trying to invoke Processing Service..");
-			String[] testParameters = { "Node " + registeredAt.getNodeId() + " registered observer!" };
-			String receivingAgentId = (String) registeredAt.invoke(sendingAgent, DATA_PROCESSING_SERVICE,
-					"getReceivingAgentId", testParameters);
+			String receivingAgentId = getReceivingAgentID();
 			try {
 				receivingAgent = (MonitoringAgent) registeredAt.getAgent(receivingAgentId);
 				System.out.println("Monitoring: Fetched receiving MonitoringAgent: " + receivingAgent.getIdentifier());
@@ -131,14 +147,40 @@ public class MonitoringObserver implements NodeObserver {
 			}
 		} catch (AgentException | ServiceInvocationException e) {
 			System.out.println("Monitoring: Processing Service does not seem available! " + e);
-			e.printStackTrace();
 			return false;
 		}
 		return true;
 	}
 
 	/**
-	 * 
+	 * Try to fetch the agent ID of the processing service.
+	 * <p>
+	 * In rare cases this method invocation might cause a deadlock, because the processing service is not fully booted
+	 * up. To avoid this we set a timeout on the method invocation. This is what the service executor is for.
+	 *
+	 * @return The agent ID of the processing service.
+	 * @throws ServiceInvocationException Any exception is converted to a ServiceInvocationException in order to behave
+	 *             like the invoke method.
+	 */
+	private String getReceivingAgentID() throws ServiceInvocationException {
+		ExecutorService executor = Executors.newCachedThreadPool();
+		Callable<String> task = () -> {
+			String[] testParameters = { "Node " + registeredAt.getNodeId() + " registered observer!" };
+			return (String) registeredAt.invoke(sendingAgent, DATA_PROCESSING_SERVICE, "getReceivingAgentId",
+					testParameters);
+		};
+		Future<String> future = executor.submit(task);
+		try {
+			return future.get(RMI_TIMEOUT, TimeUnit.SECONDS);
+		} catch (TimeoutException | InterruptedException | ExecutionException ex) {
+			future.cancel(true);
+			throw new ServiceInvocationException("Monitoring: Could not fetch monitoring service agent. "
+					+ "The monitoring service is either offline or still booting.", ex);
+		}
+	}
+
+	/**
+	 *
 	 * Processes the incoming data by generating a {@link MonitoringMessage} of it. This {@link MonitoringMessage} will
 	 * be stored in an array of {@link MonitoringMessage}s, which will be send via a
 	 * {@link i5.las2peer.communication.Message} to the Processing Service.
@@ -147,17 +189,6 @@ public class MonitoringObserver implements NodeObserver {
 	@Override
 	public void log(Long timestamp, MonitoringEvent event, String sourceNode, String sourceAgentId,
 			String destinationNode, String destinationAgentId, String remarks) {
-		// Now this is a bit tricky..
-		// We get a "Node is Running" event, but we have to wait until the next event to be sure that
-		// the method that called the "Running" event has terminated, otherwise our request will crash this startup
-		// method
-		if (readyForInitializing) {
-			readyForInitializing = false; // "Nearly" atomic, enough in this case;-)
-			initializedDone = initializeAgents();
-		}
-		if (event == MonitoringEvent.NODE_STATUS_CHANGE && remarks.equals("RUNNING")) {
-			readyForInitializing = true;
-		}
 		if (sourceNode == null) {
 			return; // We do not log events without a source node into a database with different sources;-)
 		}
@@ -178,6 +209,7 @@ public class MonitoringObserver implements NodeObserver {
 				destinationNode, destinationAgentId, remarks);
 
 		if (readyToSend()) {
+			checkInit();
 			if (initializedDone) {
 				messagesCount = 0;
 				sendMessages();
@@ -219,12 +251,18 @@ public class MonitoringObserver implements NodeObserver {
 		if (messagesCount > 1) {
 			long previous = monitoringMessages[messagesCount - 2].getTimestamp();
 			long sendDeadline = System.currentTimeMillis() - waitUntilSend;
-			if (previous < sendDeadline) {
-				return true;
-			}
+			return previous < sendDeadline;
 		}
 
 		return false;
+	}
+
+	private void resetReceivingAgent() {
+		if (receivingAgent != null) {
+			System.out.println("Monitoring: Reinitialize on next log message...");
+			initializedDone = false;
+			readyForInitializing = true;
+		}
 	}
 
 	/**
@@ -235,14 +273,24 @@ public class MonitoringObserver implements NodeObserver {
 	private void sendMessages() {
 		try {
 			Message las2peerMessage = new Message(sendingAgent, receivingAgent, monitoringMessages);
-			messageResultListener = new MessageResultListener(2000); // unused
+			// if something goes wrong after sending a message the receiving agent is marked for reinitialization
+			messageResultListener = new MessageResultListener(2000) {
+				@Override
+				public void notifyException(Exception exception) {
+					resetReceivingAgent();
+					System.out.println("Monitoring: message " + las2peerMessage.getId() + " encountered an exception: "
+							+ exception.getMessage());
+				}
+
+				@Override
+				public void notifyTimeout() {
+					resetReceivingAgent();
+					System.out.println("Monitoring: message " + las2peerMessage.getId() + " timed out. ");
+				}
+			};
 			registeredAt.sendMessage(las2peerMessage, messageResultListener);
 			System.out.println("Monitoring: message " + las2peerMessage.getId() + " send!");
-		} catch (InternalSecurityException e) {
-			e.printStackTrace();
-		} catch (EncodingFailedException e) {
-			e.printStackTrace();
-		} catch (SerializationException e) {
+		} catch (InternalSecurityException | EncodingFailedException | SerializationException e) {
 			e.printStackTrace();
 		}
 	}
